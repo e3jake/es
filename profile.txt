@@ -1,0 +1,78 @@
+1.
+
+mkdir profiling && cd "$_"
+ 
+for i in {1..10}
+do
+   wget "https://raw.githubusercontent.com/coralogix-resources/wikipedia_api_json_data/master/data/wiki_$i.bulk"
+done
+ 
+curl --request PUT 'http://localhost:9200/wiki' \
+-d '{"settings": { "number_of_shards": 1, "number_of_replicas": 0 }}'
+ 
+for bulk in *.bulk
+do
+   /usr/bin/curl --silent --output /dev/null --request POST "http://localhost:9200/wiki/_doc/_bulk?refresh=true" --header 'Content-Type: application/x-ndjson' --data-binary "@$bulk"
+   echo "Bulk item: $bulk INDEXED!"
+done
+
+
+2.
+
+curl --location --request POST 'http://localhost:9200/wiki/_search?pretty' --data-raw '{
+   "size": 1,
+   "query": { "match": { "displaytitle": "cloud" } }
+}'
+
+
+3.
+
+curl --request PUT 'http://localhost:9200/wiki/_settings' \
+-d '{
+   "index.search.slowlog.threshold.query.warn": "10ms",
+   "index.search.slowlog.threshold.fetch.warn": "5ms",
+   "index.search.slowlog.level": "info"
+}'
+
+
+4.
+
+profile_result="$(curl --silent --location --request POST 'http://localhost:9200/wiki/_search?pretty' --data-raw '{
+   "profile": true,
+   "query": {
+       "bool": {
+           "should": {
+               "multi_match": {
+                   "fields": ["displaytitle", "description", "extract"],
+                   "query": "database"
+               }
+           },
+           "must": {
+               "match_phrase": {
+                   "extract": {
+                       "query": "cloud service",
+                       "slop": 2
+                   }
+               }
+           },
+           "filter" : {
+               "range" : {
+                   "timestamp" : { "gte" : "now-1y" }
+               }
+           }
+       }
+   }
+}')"
+
+
+
+5.
+
+echo "$profile_result" | jq '.profile.shards[].searches[].query[]' | grep 'type\|description\|time_in_nanos'
+
+6.
+
+echo "$profile_result" | jq '.profile.shards[].searches[].query[].children[0].breakdown'
+
+
+
